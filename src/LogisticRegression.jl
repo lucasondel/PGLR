@@ -4,7 +4,6 @@
 using LinearAlgebra
 
 export BinaryLogisticRegression
-export _augment_posterior
 
 #######################################################################
 # Binary logistic regression
