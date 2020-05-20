@@ -28,7 +28,7 @@ function BinaryLogisticRegression(μ₀::AbstractVector, Σ₀::AbstractMatrix,
 end
 
 function BinaryLogisticRegression(T; inputdim::Integer, initσ::Real = 0.0,
-                                  pseudocounts::Real = 1.0, hasbias::Bool = True)
+                                  pseudocounts::Real = 1.0, hasbias::Bool = true)
 
     dim = hasbias ? inputdim + 1 : inputdim
 
@@ -44,7 +44,7 @@ function BinaryLogisticRegression(T; inputdim::Integer, initσ::Real = 0.0,
 end
 
 function BinaryLogisticRegression(;inputdim::Integer, initσ::Real = 0.0,
-                                  pseudocounts::Real = 1.0, hasbias::Bool = True)
+                                  pseudocounts::Real = 1.0, hasbias::Bool = true)
     BinaryLogisticRegression(Float64, inputdim = inputdim, initσ = initσ,
                              pseudocounts = pseudocounts, hasbias = hasbias)
 end
@@ -71,7 +71,7 @@ end
 # Return the sufficient statistics of the log likelihood and the
 # the expected statistics of β.
 function _precompute(model::BinaryLogisticRegression, X::AbstractMatrix,
-                     z::AbstractVector)
+                     z::AbstractVector, Nₖ::Union{AbstractVector, Nothing} = nothing)
     X̂ = regressors(model, X)
 
     # Quadratic expansion of the regressors
@@ -89,14 +89,17 @@ function _precompute(model::BinaryLogisticRegression, X::AbstractMatrix,
     qω = _augment_posterior(ψ²)
     E_ω = mean(qω)
 
-    stats = vcat(reshape((z .- 0.5), 1, N) .* X̂,
+    zstats = isnothing(Nₖ) ? (z .- 0.5) : z .- Nₖ * 0.5
+
+    stats = vcat(reshape(zstats, 1, N) .* X̂,
                  -.5 .* reshape(E_ω, 1, :) .* vec_X̂X̂ᵀ)
 
     stats, E_Tβ, pω, qω
 end
 
-function (model::BinaryLogisticRegression)(X::AbstractMatrix, z::AbstractVector)
-    stats, E_Tβ, pω, qω = _precompute(model, X, z)
+function (model::BinaryLogisticRegression)(X::AbstractMatrix, z::AbstractVector,
+                                           Nₖ::Union{AbstractVector, Nothing} = nothing)
+    stats, E_Tβ, pω, qω = _precompute(model, X, z, Nₖ)
 
     # KL divegerence betwen qω and pω for each sample.
     q_η, p_η = naturalparam(qω), naturalparam(pω)
@@ -105,8 +108,9 @@ function (model::BinaryLogisticRegression)(X::AbstractMatrix, z::AbstractVector)
     stats' * E_Tβ .- KL .- log(2)
 end
 
-function accumulator_β(model::BinaryLogisticRegression, X::AbstractMatrix, z::AbstractVector)
-    stats, E_Tβ, _, _ = _precompute(model, X, z)
+function accumulator_β(model::BinaryLogisticRegression, X::AbstractMatrix,
+                       z::AbstractVector, Nₖ::Union{AbstractVector, Nothing} = nothing)
+    stats, E_Tβ, _, _ = _precompute(model, X, z, Nₖ)
     dropdims(sum(stats, dims=2), dims=2)
 end
 
