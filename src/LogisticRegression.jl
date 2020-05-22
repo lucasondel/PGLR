@@ -4,6 +4,7 @@
 using LinearAlgebra
 
 export BinaryLogisticRegression
+export predict
 
 #######################################################################
 # Binary logistic regression
@@ -20,16 +21,15 @@ struct BinaryLogisticRegression <: Model
 end
 
 
-function BinaryLogisticRegression(μ₀::AbstractVector, Σ₀::AbstractMatrix,
-                                  μ::AbstractVector, Σ::AbstractMatrix,
-                                  hasbias::Bool)
+function BinaryLogisticRegression(μ₀::Vector{T}, Σ₀::Matrix{T},
+                                  μ::Vector{T}, Σ::Matrix{T},
+                                  hasbias::Bool) where T <: AbstractFloat
     BinaryLogisticRegression(ConjugateParameter(Normal(μ₀, Σ₀), Normal(μ, Σ)),
                              hasbias)
 end
 
 function BinaryLogisticRegression(T; inputdim::Integer, initσ::Real = 0.0,
                                   pseudocounts::Real = 1.0, hasbias::Bool = true)
-
     dim = hasbias ? inputdim + 1 : inputdim
 
     # Prior parameters
@@ -49,11 +49,11 @@ function BinaryLogisticRegression(;inputdim::Integer, initσ::Real = 0.0,
                              pseudocounts = pseudocounts, hasbias = hasbias)
 end
 
-function regressors(model::BinaryLogisticRegression, X::AbstractMatrix)
+function regressors(model::BinaryLogisticRegression, X::Matrix{T}) where T <: AbstractFloat
     if model.hasbias
         # We add an extra dimension always set to "1" to incorporate a bias
         # parameter to the model.
-        return vcat(X, ones(eltype(X), 1, size(X, 2)))
+        return vcat(X, ones(T, 1, size(X, 2)))
     end
     return X
 end
@@ -61,8 +61,8 @@ end
 
 # Return the Polya-Gamma posterior of the augmented
 # logistic function
-function _augment_posterior(ψ²::AbstractVector)
-    b = ones(eltype(ψ²), length(ψ²))
+function _augment_posterior(ψ²::Vector{T}) where T <: AbstractFloat
+    b = ones(T, length(ψ²))
     qω = PolyaGamma(b)
     update!(qω, -.5 * ψ²)
     return qω
@@ -70,8 +70,10 @@ end
 
 # Return the sufficient statistics of the log likelihood and the
 # the expected statistics of β.
-function _precompute(model::BinaryLogisticRegression, X::AbstractMatrix,
-                     z::AbstractVector, Nₖ::Union{AbstractVector, Nothing} = nothing)
+function _precompute(model::BinaryLogisticRegression, X::Matrix{T1},
+                     z::Vector{T2},
+                     Nₖ::Union{Vector{T2}, Nothing} = nothing) where {T1 <: AbstractFloat,
+                                                                      T2 <: Real}
     X̂ = regressors(model, X)
 
     # Quadratic expansion of the regressors
@@ -84,7 +86,7 @@ function _precompute(model::BinaryLogisticRegression, X::AbstractMatrix,
     vec_E_ββᵀ = E_Tβ[D+1:end]
 
     # Augmentation of the logistic function
-    pω = PolyaGamma(ones(eltype(X̂), size(X̂, 2)))
+    pω = PolyaGamma{T1, size(X̂, 2)}()
     ψ² = vec_X̂X̂ᵀ' * vec_E_ββᵀ
     qω = _augment_posterior(ψ²)
     E_ω = mean(qω)
@@ -97,8 +99,10 @@ function _precompute(model::BinaryLogisticRegression, X::AbstractMatrix,
     stats, E_Tβ, pω, qω
 end
 
-function (model::BinaryLogisticRegression)(X::AbstractMatrix, z::AbstractVector,
-                                           Nₖ::Union{AbstractVector, Nothing} = nothing)
+function (model::BinaryLogisticRegression)(X::Matrix{T1},
+                                           z::Vector{T2},
+                                           Nₖ::Union{Vector{T2}, Nothing} = nothing) where {T1 <: AbstractFloat,
+                                                                                            T2 <: Real}
     stats, E_Tβ, pω, qω = _precompute(model, X, z, Nₖ)
 
     # KL divegerence betwen qω and pω for each sample.
@@ -108,9 +112,28 @@ function (model::BinaryLogisticRegression)(X::AbstractMatrix, z::AbstractVector,
     stats' * E_Tβ .- KL .- log(2)
 end
 
-function accumulator_β(model::BinaryLogisticRegression, X::AbstractMatrix,
-                       z::AbstractVector, Nₖ::Union{AbstractVector, Nothing} = nothing)
+function accumulator_β(model::BinaryLogisticRegression,
+                       X::Matrix{T1},
+                       z::Vector{T2},
+                       Nₖ::Union{Vector{T2}, Nothing} = nothing) where {T1 <: AbstractFloat,
+                                                                        T2 <: Real}
     stats, E_Tβ, _, _ = _precompute(model, X, z, Nₖ)
     dropdims(sum(stats, dims=2), dims=2)
 end
+
+function predict(model::BinaryLogisticRegression,
+                 X::Matrix{T}) where T <: AbstractFloat
+    # Following https://arxiv.org/pdf/1703.00091.pdf, we use the
+    # approximation:
+    # ⟨σ(ψ)⟩ ≈ σ(μ / √(1 + a * σ²))
+    # where a = 0.368
+
+    μ, Σ = stdparam(model.β.posterior)
+    X̂ = regressors(model, X)
+
+    σ²s = [sum((Σ .* x̂') .* x̂) for x̂ in eachcol(X̂)]
+    ψs = (X̂' * μ) ./ sqrt.(1 .+ 0.368 * σ²s)
+    1 ./ (1 .+ exp.(-ψs))
+end
+
 
