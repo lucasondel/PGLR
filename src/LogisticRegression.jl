@@ -122,17 +122,18 @@ function accumulator_β(model::BinaryLogisticRegression,
 end
 
 function predict(model::BinaryLogisticRegression,
-                 X::Matrix{T}) where T <: AbstractFloat
+                 X::Matrix{T}; a::T = 0.368) where T <: AbstractFloat
     # Following https://arxiv.org/pdf/1703.00091.pdf, we use the
     # approximation:
     # ⟨σ(ψ)⟩ ≈ σ(μ / √(1 + a * σ²))
     # where a = 0.368
+    # In Bishop 4.5.2 a very similar approximation uses a = π / 8 ≈ 0.392...
 
     μ, Σ = stdparam(model.β.posterior)
     X̂ = regressors(model, X)
 
     σ²s = [sum((Σ .* x̂') .* x̂) for x̂ in eachcol(X̂)]
-    ψs = (X̂' * μ) ./ sqrt.(1 .+ 0.368 * σ²s)
+    ψs = (X̂' * μ) ./ sqrt.(1 .+ a * σ²s)
     1 ./ (1 .+ exp.(-ψs))
 end
 
