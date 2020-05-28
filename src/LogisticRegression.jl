@@ -235,3 +235,16 @@ function accumulator_β(model::LogisticRegression, k::Integer,
                   Nₖ[k, z .>= k])
 end
 
+function predict(model::LogisticRegression{K}, X::Matrix{T}) where {K, T <: AbstractFloat}
+    retval = zeros(T, K, size(X, 2))
+    for k in 1:K
+        residual = dropdims(sum(retval[1:k, :], dims = 1), dims = 1)
+        if k < K
+            retval[k, :] = predict(model.stickbreaking[k], X) .* (1 .- residual)
+        else
+            retval[k, :] = (1 .- residual)
+        end
+    end
+    retval
+end
+
