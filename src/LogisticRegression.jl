@@ -218,7 +218,6 @@ end
 
 function (model::LogisticRegression)(X::Matrix{T1}, z::Vector{T2},) where {T1 <: AbstractFloat,
                                                                            T2 <: Integer}
-
     onehot, Nₖ = _encode(model, z)
     retval = zeros(T1, size(X, 2))
     for (k, m) in enumerate(model.stickbreaking)

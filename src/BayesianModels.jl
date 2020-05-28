@@ -99,11 +99,11 @@ Supertype for JuBeer models.
 abstract type Model end
 
 # Imitate pytorch printing style of model.
-function Base.show(io::IO, model::Model; pad = 0)
+function Base.show(io::IO, model::Model; pad = 0, padshift = 2, prefix = "")
     originalpad = pad
-    modelname = "$(typeof(model))("
-    println(io, modelname)
-    pad += 2
+    modelname = "$(prefix)$(typeof(model))("
+    println(io, lpad(modelname, length(modelname) + pad))
+    pad += padshift
     for name in propertynames(model)
         pval = getproperty(model, name)
         if isa(pval, Model)
@@ -112,6 +112,14 @@ function Base.show(io::IO, model::Model; pad = 0)
             Base.show(io, pval, pad=pad)
         elseif isa(pval, BayesianParameter)
             pstr = "($(name)): $(pval)"
+            println(io, lpad(pstr, length(pstr) + pad))
+        elseif isa(pval, AbstractVector{<:Model})
+            pstr = "($(name)): ["
+            println(io, lpad(pstr, length(pstr) + pad))
+            for (i, m) in enumerate(pval)
+                Base.show(io, m, pad = pad + padshift, prefix = "($i) ")
+            end
+            pstr = "]"
             println(io, lpad(pstr, length(pstr) + pad))
         end
     end
