@@ -4,10 +4,16 @@
 using LinearAlgebra
 
 export BinaryLogisticRegression
+export LogisticRegression
 export predict
 
 #######################################################################
 # Binary logistic regression
+#
+# NOTE:
+# We discourage the use of BinaryLogisticRegression model directly.
+# Instead, you should use the general LogisticRegression model (which
+# uses the BinaryLogisticRegression itself).
 
 struct BinaryLogisticRegression <: Model
     β::ConjugateParameter{<:Normal}
@@ -34,10 +40,10 @@ function BinaryLogisticRegression(T; inputdim::Integer, initσ::Real = 0.0,
 
     # Prior parameters
     μ₀ = zeros(T, dim)
-    Σ₀ = (1/pseudocounts) * Matrix{T}(I, dim, dim)
+    Σ₀ = T(1/pseudocounts) * Matrix{T}(I, dim, dim)
 
     # Initial paremeterization of the posterior
-    μ = μ₀ .+ initσ .* randn()
+    μ = μ₀ .+ T(initσ) .* randn(T)
     Σ = deepcopy(Σ₀)
 
     BinaryLogisticRegression(μ₀, Σ₀, μ, Σ, hasbias)
@@ -137,4 +143,95 @@ function predict(model::BinaryLogisticRegression,
     1 ./ (1 .+ exp.(-ψs))
 end
 
+#######################################################################
+# K-class Logistic Regression (LR) based on the stick-breaking process
+#
+# References
+# ----------
+# [1] Dependent Multinomial Modes Made Easy: Stick-Breaing with the
+#     Polya-Gamma Augmentation (https://arxiv.org/pdf/1506.05843.pdf)
+
+
+struct LogisticRegression{K} <: Model
+    # The LR is defined by K - 1 binary LR models (see eq. (7) in [1])
+    stickbreaking::Array{BinaryLogisticRegression}
+
+    function LogisticRegression(sb::Array{BinaryLogisticRegression})
+        model = new{length(sb) + 1}(sb)
+
+        # We override the accumulators
+        for (k, binarylr) in enumerate(sb)
+            println("replacing accumulator for $(binarylr)")
+            binarylr.β.accumulator = data -> accumulator_β(model, k, data...)
+        end
+
+        return model
+    end
+end
+
+function LogisticRegression(μ₀::Vector{T}, Σ₀::Matrix{T}, μ::Vector{T},
+                            Σ::Matrix{T}, hasbias::Bool; nclasses::Integer) where T <: AbstractFloat
+    LogisticRegression([BinaryLogisticRegression(μ₀, Σ₀, deepcopy(μ), deepcopy(Σ), hasbias)
+                        for i in 1:nclasses-1])
+end
+
+function LogisticRegression(T; inputdim::Integer, nclasses::Integer,
+                            initσ::Real = 0.0, pseudocounts::Real = 1.0,
+                            hasbias::Bool = true)
+    dim = hasbias ? inputdim + 1 : inputdim
+
+    # Prior parameters
+    μ₀ = zeros(T, dim)
+    Σ₀ = T(1/pseudocounts) * Matrix{T}(I, dim, dim)
+
+    # Initial paremeterization of the posterior
+    μ = μ₀ .+ T(initσ) .* randn(T)
+    Σ = deepcopy(Σ₀)
+
+    LogisticRegression(μ₀, Σ₀, μ, Σ, hasbias, nclasses = nclasses)
+end
+
+function LogisticRegression(;inputdim::Integer, nclasses::Integer,
+                            initσ::Real = 0.0, pseudocounts::Real = 1.0,
+                            hasbias::Bool = true)
+    LogisticRegression(Float64, inputdim = inputdim, nclasses = nclasses,
+                       initσ = initσ, pseudocounts = pseudocounts,
+                       hasbias = hasbias)
+end
+
+getconjugateparams(model::LogisticRegression) = [m.β for m in model.stickbreaking]
+
+function _encode(::LogisticRegression{K}, z::Vector{T}) where {K, T <: Integer}
+    onehot = zeros(T, K - 1, length(z))
+    for i = 1:K-1
+        onehot[i, z .== i] .= 1
+    end
+
+    # See eq. (6) in [1]. In our case, N = 1
+    Nₖ = zeros(T, K - 1, length(z))
+    for i = 1:K-1
+        Nₖ[i, z .>= i] .= 1
+    end
+
+   onehot, Nₖ
+end
+
+function (model::LogisticRegression)(X::Matrix{T1}, z::Vector{T2},) where {T1 <: AbstractFloat,
+                                                                           T2 <: Integer}
+
+    onehot, Nₖ = _encode(model, z)
+    retval = zeros(T1, size(X, 2))
+    for (k, m) in enumerate(model.stickbreaking)
+        retval[z .>= k] .+= m(X[:, z .>= k], onehot[k, z .>= k], Nₖ[k, z .>= k])
+    end
+    retval
+end
+
+function accumulator_β(model::LogisticRegression, k::Integer,
+                         X::Matrix{T1},
+                         z::Vector{T2}) where {T1 <: AbstractFloat, T2 <: Real}
+    onehot, Nₖ = _encode(model, z)
+    accumulator_β(model.stickbreaking[k], X[:, z .>= k], onehot[k, z .>= k],
+                  Nₖ[k, z .>= k])
+end
 
