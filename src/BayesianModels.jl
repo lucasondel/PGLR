@@ -139,6 +139,7 @@ function elbo(model::Model, X...)
 end
 
 include("LogisticRegression.jl")
+include("ARNormals.jl")
 
 # Helper functions for plotting parameters of the models.
 include("Plotting.jl")
