@@ -21,7 +21,7 @@ struct BinaryLogisticRegression <: Model
 
     function BinaryLogisticRegression(β::ConjugateParameter{<:Normal}, hasbias::Bool)
         model = new(β, hasbias)
-        β.accumulator = data -> accumulator_β(model, data...)
+        β.stats = data -> stats_β(model, data...)
         return model
     end
 end
@@ -118,13 +118,13 @@ function (model::BinaryLogisticRegression)(X::Matrix{T1},
     stats' * E_Tβ .- KL .- log(2)
 end
 
-function accumulator_β(model::BinaryLogisticRegression,
+function stats_β(model::BinaryLogisticRegression,
                        X::Matrix{T1},
                        z::Vector{T2},
                        Nₖ::Union{Vector{T2}, Nothing} = nothing) where {T1 <: AbstractFloat,
                                                                         T2 <: Real}
     stats, E_Tβ, _, _ = _precompute(model, X, z, Nₖ)
-    dropdims(sum(stats, dims=2), dims=2)
+    stats
 end
 
 function predict(model::BinaryLogisticRegression,
@@ -159,10 +159,9 @@ struct LogisticRegression{K} <: Model
     function LogisticRegression(sb::Array{BinaryLogisticRegression})
         model = new{length(sb) + 1}(sb)
 
-        # We override the accumulators
+        # We override the stats
         for (k, binarylr) in enumerate(sb)
-            println("replacing accumulator for $(binarylr)")
-            binarylr.β.accumulator = data -> accumulator_β(model, k, data...)
+            binarylr.β.stats = data -> stats_β(model, k, data...)
         end
 
         return model
@@ -226,11 +225,11 @@ function (model::LogisticRegression)(X::Matrix{T1}, z::Vector{T2},) where {T1 <:
     retval
 end
 
-function accumulator_β(model::LogisticRegression, k::Integer,
+function stats_β(model::LogisticRegression, k::Integer,
                          X::Matrix{T1},
                          z::Vector{T2}) where {T1 <: AbstractFloat, T2 <: Real}
     onehot, Nₖ = _encode(model, z)
-    accumulator_β(model.stickbreaking[k], X[:, z .>= k], onehot[k, z .>= k],
+    stats_β(model.stickbreaking[k], X[:, z .>= k], onehot[k, z .>= k],
                   Nₖ[k, z .>= k])
 end
 

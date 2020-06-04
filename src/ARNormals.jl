@@ -38,8 +38,8 @@ struct ARNormal1D{K} <: Model
     function ARNormal1D(h, λ) where K
         μ₀, _ = stdparam(h.prior)
         model = new{length(μ₀) - 1}(h, λ)
-        h.accumulator = (X) -> accumulator1D_h(model, X)
-        λ.accumulator = (X) -> accumulator1D_λ(model, X)
+        h.stats = (X) -> stats1D_h(model, X)
+        λ.stats = (X) -> stats1D_λ(model, X)
         return model
     end
 end
@@ -90,32 +90,32 @@ function (model::ARNormal1D{K})(x::Vector{T}) where {T <: AbstractFloat, K}
 end
 
 
-function accumulator1D_h(model::ARNormal1D{K}, x::Vector{T}) where {T <: AbstractFloat, K}
+function stats1D_h(model::ARNormal1D{K}, x::Vector{T}) where {T <: AbstractFloat, K}
     px = PaddedView(0., x, (1-K:length(x), ))
     regressors = Regressors1D{T, K}(px)
     E_λ, E_lnλ = gradlognorm(model.λ.posterior)
-    accstats = zeros(T, (K + 1) * (K + 2))
+    retval = zeros(T, (K + 1) * (K + 2), length(x))
     N = length(px) - K
     for n in 1:N
         r = vec(regressors[n])
-        accstats += vcat(E_λ * r * px[n], -.5 * E_λ * vec(r * r'))
+        retval[:, n] = vcat(E_λ * r * px[n], -.5 * E_λ * vec(r * r'))
     end
-    accstats
+    retval
 end
 
 
-function accumulator1D_λ(model::ARNormal1D{K}, x::Vector{T}) where {T <: AbstractFloat, K}
+function stats1D_λ(model::ARNormal1D{K}, x::Vector{T}) where {T <: AbstractFloat, K}
     px = PaddedView(0., x, (1-K:length(x), ))
     regressors = Regressors1D{T, K}(px)
     E_Th = gradlognorm(model.h.posterior)
-    accstats = zeros(T, 2)
+    retval = zeros(T, 2, length(x))
     N = length(px) - K
     for n in 1:N
         r = vec(regressors[n])
         stats = vcat(r * px[n], -.5 * vec(r * r'))
-        accstats += [-.5 * px[n]^2 + dot(E_Th, stats), .5]
+        retval[:, n] = [-.5 * px[n]^2 + dot(E_Th, stats), .5]
     end
-    accstats
+    retval
 end
 
 #######################################################################
@@ -127,10 +127,10 @@ struct ARNormal{D, K} <: Model
     function ARNormal(filters::Vector{ARNormal1D{K}}) where K
         model = new{length(filters), K}(filters)
 
-        # We override the accumulators
+        # We override the stats
         for (d, filter) in enumerate(filters)
-            filter.h.accumulator = data -> accumulator_h(model, d, data)
-            filter.λ.accumulator = data -> accumulator_λ(model, d, data)
+            filter.h.stats = data -> stats_h(model, d, data)
+            filter.λ.stats = data -> stats_λ(model, d, data)
         end
         model
     end
@@ -170,11 +170,11 @@ function (model::ARNormal)(X::Matrix{T}) where T <: AbstractFloat
     retval
 end
 
-function accumulator_h(model::ARNormal, d::Integer, X::Matrix{T}) where T <: AbstractFloat
-    accumulator1D_h(model.filters[d], X[d, :])
+function stats_h(model::ARNormal, d::Integer, X::Matrix{T}) where T <: AbstractFloat
+    stats1D_h(model.filters[d], X[d, :])
 end
 
-function accumulator_λ(model::ARNormal, d::Integer, X::Matrix{T}) where T <: AbstractFloat
-    accumulator1D_λ(model.filters[d], X[d, :])
+function stats_λ(model::ARNormal, d::Integer, X::Matrix{T}) where T <: AbstractFloat
+    stats1D_λ(model.filters[d], X[d, :])
 end
 

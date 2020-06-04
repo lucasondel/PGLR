@@ -40,7 +40,7 @@ Standard implementation of a conjugate parameter.
 mutable struct ConjugateParameter{T <: ExpFamilyDistribution} <: AbstractConjugateParameter
     prior::T
     posterior::T
-    accumulator::Function
+    stats::Function
 
     function ConjugateParameter(prior::ExpFamilyDistribution,
                                 post::ExpFamilyDistribution)
@@ -73,7 +73,7 @@ Conjugate parameter whose prior depends on another parameter.
 mutable struct HierarchicalConjugateParameter{T <: ExpFamilyDistribution} <: AbstractConjugateParameter
     getprior::Function
     posterior::T
-    accumulator::Function
+    stats::Function
 
     function HierarchicalConjugateParameter(getprior::Function,
                                             post::ExpFamilyDistribution)
