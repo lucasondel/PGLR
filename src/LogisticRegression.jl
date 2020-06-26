@@ -147,12 +147,16 @@ function predict(model::BinaryLogisticRegression,
     # where a = 0.368
     # In Bishop 4.5.2 a very similar approximation uses a = π / 8 ≈ 0.392...
 
-    μ, Σ = stdparam(model.β.posterior)
     X̂ = regressors(model.hasbias, X)
+    μ, Σ = stdparam(model.β.posterior)
+    E_ββᵀ = Σ + μ * μ'
 
-    σ²s = [sum((Σ .* x̂') .* x̂) for x̂ in eachcol(X̂)]
-    ψs = (X̂' * μ) ./ sqrt.(1 .+ a * σ²s)
-    1 ./ (1 .+ exp.(-ψs))
+    ψ_μ = X̂' * μ
+    ψ² = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
+    ψ_σ² = ψ² .- (ψ_μ .^ 2)
+
+    y = ψ_μ ./ sqrt.(1 .+ a * ψ_σ²)
+    1 ./ (1 .+ exp.(-y))
 end
 
 #######################################################################
