@@ -139,7 +139,17 @@ function stats_β(model::BinaryLogisticRegression,
     vcat(s1, vec(s2))
 end
 
-function predict(model::BinaryLogisticRegression,
+# Predict the classes using the Maximum A Posteriori (MAP) parameters
+function predict_map(model::BinaryLogisticRegression, X::Matrix{T}) where T <: AbstractFloat
+
+    X̂ = regressors(model.hasbias, X)
+    μ, _ = stdparam(model.β.posterior)
+    y = X̂' * μ
+    1 ./ (1 .+ exp.(-y))
+end
+
+# Predict the classes the Posteriori (MAP) parameters
+function predict_marginal(model::BinaryLogisticRegression,
                  X::Matrix{T}; a::T = 0.368) where T <: AbstractFloat
     # Following https://arxiv.org/pdf/1703.00091.pdf, we use the
     # approximation:
@@ -157,6 +167,14 @@ function predict(model::BinaryLogisticRegression,
 
     y = ψ_μ ./ sqrt.(1 .+ a * ψ_σ²)
     1 ./ (1 .+ exp.(-y))
+end
+
+function predict(model::BinaryLogisticRegression, X::Matrix{T};
+                 marginalize::Bool = true) where T <: AbstractFloat
+    if marginalize
+        return predict_marginal(model, X)
+    end
+    return predict_map(model, X)
 end
 
 #######################################################################
@@ -245,12 +263,14 @@ function stats_β(model::LogisticRegression, k::Integer,
                   Nₖ[k, z .>= k])
 end
 
-function predict(model::LogisticRegression{K}, X::Matrix{T}) where {K, T <: AbstractFloat}
+function predict(model::LogisticRegression{K}, X::Matrix{T};
+                 marginalize::Bool = true) where {K, T <: AbstractFloat}
     retval = zeros(T, K, size(X, 2))
     for k in 1:K
         residual = dropdims(sum(retval[1:k, :], dims = 1), dims = 1)
         if k < K
-            retval[k, :] = predict(model.stickbreaking[k], X) .* (1 .- residual)
+            retval[k, :] = predict(model.stickbreaking[k], X,
+                                   marginalize = marginalize) .* (1 .- residual)
         else
             retval[k, :] = (1 .- residual)
         end
