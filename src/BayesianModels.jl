@@ -1,5 +1,6 @@
 module BayesianModels
 
+using Serialization
 using ExpFamilyDistributions
 
 export Model
@@ -7,9 +8,11 @@ export BayesianParameter
 export AbstractConjugateParameter
 export ConjugateParameter
 export HierarchicalConjugateParameter
+
 export elbo
 export getconjugateparams
-
+export load
+export save
 
 
 """
@@ -136,6 +139,28 @@ function elbo(model::Model, X...)
     KL = sum([kldiv(param.posterior, param.prior)
               for param in getconjugateparams(model)])
     return sum(model(X...)) - KL
+end
+
+"""
+    save(filename, model)
+
+Save `model` to `filename`.
+"""
+function save(filename::AbstractString, model::Model)
+    open(filename, "w") do file
+        serialize(file, model)
+    end
+end
+
+"""
+    load(filename, model)
+
+Load a model from `filename`.
+"""
+function load(filename::AbstractString)
+    open(filename, "r") do file
+        return deserialize(file)
+    end
 end
 
 include("LogisticRegression.jl")
