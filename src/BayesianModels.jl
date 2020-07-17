@@ -110,19 +110,31 @@ function Base.show(io::IO, model::Model; pad = 0, padshift = 2, prefix = "")
     for name in propertynames(model)
         pval = getproperty(model, name)
         if isa(pval, Model)
-            pstr = "($(name)): "
+            pstr = "$(name): "
             print(io, lpad(pstr, length(pstr) + pad))
             Base.show(io, pval, pad=pad)
         elseif isa(pval, BayesianParameter)
-            pstr = "($(name)): $(pval)"
+            pstr = "$(name): $(pval)"
             println(io, lpad(pstr, length(pstr) + pad))
         elseif isa(pval, AbstractVector{<:Model})
-            pstr = "($(name)): ["
+            pstr = "$(name): ["
             println(io, lpad(pstr, length(pstr) + pad))
             for (i, m) in enumerate(pval)
                 Base.show(io, m, pad = pad + padshift, prefix = "($i) ")
             end
             pstr = "]"
+            println(io, lpad(pstr, length(pstr) + pad))
+        elseif isa(pval, AbstractVector{<:BayesianParameter})
+            pstr = "$(name): ["
+            println(io, lpad(pstr, length(pstr) + pad))
+            for (i, m) in enumerate(pval)
+                idx = "($i) $(m)"
+                println(io, lpad(idx, length(idx) + pad + padshift))
+            end
+            pstr = "]"
+            println(io, lpad(pstr, length(pstr) + pad))
+        else
+            pstr = "$(name): $pval"
             println(io, lpad(pstr, length(pstr) + pad))
         end
     end
