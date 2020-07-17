@@ -7,6 +7,9 @@ export BinaryLogisticRegression
 export LogisticRegression
 export predict
 
+# TO REMOVE
+export regressors
+
 #######################################################################
 # Helper functions
 #
@@ -187,15 +190,16 @@ end
 
 
 struct LogisticRegression{K} <: Model
-    # The LR is defined by K - 1 binary LR models (see eq. (7) in [1])
-    stickbreaking::Array{BinaryLogisticRegression}
+    bases::Vector{<:ConjugateParameter{<:Normal}}
+    hasbias::Bool
 
-    function LogisticRegression(sb::Array{BinaryLogisticRegression})
-        model = new{length(sb) + 1}(sb)
+    function LogisticRegression(bases::Vector{<:ConjugateParameter{<:Normal}},
+                                hasbias::Bool)
+        model = new{length(bases) + 1}(bases, hasbias)
 
         # We override the stats
-        for (k, binarylr) in enumerate(sb)
-            binarylr.β.stats = data -> stats_β(model, k, data...)
+        for β in bases
+            β.stats = data -> stats_β(model, k, data...)
         end
 
         return model
@@ -204,8 +208,9 @@ end
 
 function LogisticRegression(μ₀::Vector{T}, Σ₀::Matrix{T}, μ::Vector{T},
                             Σ::Matrix{T}, hasbias::Bool; nclasses::Integer) where T <: AbstractFloat
-    LogisticRegression([BinaryLogisticRegression(μ₀, Σ₀, deepcopy(μ), deepcopy(Σ), hasbias)
-                        for i in 1:nclasses-1])
+    bases = Vector([ConjugateParameter(Normal(μ₀, Σ₀), Normal(deepcopy(μ), deepcopy(Σ)))
+                    for i = 1:nclasses-1])
+    LogisticRegression(bases, hasbias)
 end
 
 function LogisticRegression(T = Float64; inputdim::Integer, nclasses::Integer,
@@ -224,7 +229,7 @@ function LogisticRegression(T = Float64; inputdim::Integer, nclasses::Integer,
     LogisticRegression(μ₀, Σ₀, μ, Σ, hasbias, nclasses = nclasses)
 end
 
-getconjugateparams(model::LogisticRegression) = [m.β for m in model.stickbreaking]
+getconjugateparams(model::LogisticRegression) = [m.β for m in model.bases]
 
 function _encode(::LogisticRegression{K}, z::Vector{T}) where {K, T <: Integer}
     onehot = zeros(T, K - 1, length(z))
@@ -243,23 +248,14 @@ end
 
 function (model::LogisticRegression)(X::Matrix{T1}, z::Vector{T2},) where {T1 <: AbstractFloat,
                                                                            T2 <: Integer}
-    onehot, Nₖ = _encode(model, z)
-    retval = zeros(T1, size(X, 2))
-    for (k, m) in enumerate(model.stickbreaking)
-        s1 = onehot[k, z .>= k]
-        if length(s1) < 1
-            continue
-        end
-        retval[z .>= k] .+= m(X[:, z .>= k], onehot[k, z .>= k], Nₖ[k, z .>= k])
-    end
-    retval
+
 end
 
 function stats_β(model::LogisticRegression, k::Integer,
                          X::Matrix{T1},
                          z::Vector{T2}) where {T1 <: AbstractFloat, T2 <: Real}
     onehot, Nₖ = _encode(model, z)
-    stats_β(model.stickbreaking[k], X[:, z .>= k], onehot[k, z .>= k],
+    stats_β(model.bases[k], X[:, z .>= k], onehot[k, z .>= k],
                   Nₖ[k, z .>= k])
 end
 
@@ -269,7 +265,7 @@ function predict(model::LogisticRegression{K}, X::Matrix{T};
     for k in 1:K
         residual = dropdims(sum(retval[1:k, :], dims = 1), dims = 1)
         if k < K
-            retval[k, :] = predict(model.stickbreaking[k], X,
+            retval[k, :] = predict(model.bases[k], X,
                                    marginalize = marginalize) .* (1 .- residual)
         else
             retval[k, :] = (1 .- residual)
