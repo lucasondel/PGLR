@@ -2,13 +2,17 @@
 #
 
 using LinearAlgebra
+using StatsFuns: log1pexp
 
 export BinaryLogisticRegression
 export LogisticRegression
 export predict
+export reorder
 
 # TO REMOVE
 export regressors
+export encode
+export pgaugmentation
 
 #######################################################################
 # Helper functions
@@ -23,22 +27,50 @@ function regressors(hasbias::Bool, X::Matrix{T}) where T <: AbstractFloat
     return X
 end
 
-# Return the Polya-Gamma prior and posterior of the augmented
-# logistic function.
-function pgaugmentation(ψ²::Vector{T}) where T <: AbstractFloat
-    # Default parameterization is b = 1, c = 0
-    pω = PolyaGamma{T, length(ψ²)}()
 
-    b = ones(T, length(ψ²))
-    qω = PolyaGamma(b, sqrt.(ψ²))
+# Mean of PolyaGamma distributions
+function pgmean(c::Union{Vector{T}, Matrix{T}}; b::Real = 1) where T <: AbstractFloat
+    retval = (b ./ (2 * c)) .* tanh.(c ./ 2)
 
-    return pω, qω
+    # When c = 0 the mean is not defined but can be extended by
+    # continuity observing that lim_{x => 0} (e^(x) - 1) / x = 0             !
+    # which lead to the mean = b / 4
+    idxs = isnan.(retval)
+    retval[idxs] .= b / 4
+    return retval
 end
 
-# KL divergence between N pairs of independent PG distributions
-function kldivperdim(qω::PolyaGamma{T, N}, pω::PolyaGamma{T, N}) where {T <: AbstractFloat, N}
-    pη, qη = naturalparam(pω), naturalparam(qω)
-    lognorm(pω, perdim = true) - lognorm(qω, perdim = true) - (pη .- qη) .*gradlognorm(qω)
+# Log-normalizer of PolyaGamma distributions
+function pglognorm(c::Union{Vector{T}, Matrix{T}}; b::Real = 1) where T <: AbstractFloat
+    return -b .* (log1pexp.(c) .- log(2) .- c ./ 2)
+end
+
+# Compute the necessary results of the PolyaGamma augmentation:
+#   1. mean of the ω variables
+#   2. KL divergence between the variational factors q(ω) and p(ω)
+function pgaugmentation(Ψ²::Union{Vector{T}, Matrix{T}}; b::Real = 1) where T <: AbstractFloat
+    c = sqrt.(Ψ²)
+    E_ω = pgmean(c)
+    kl = -.5 .* (c.^2) .* E_ω .- pglognorm(c)
+    E_ω, kl
+end
+
+# For the purpose of operating with matrices the function encodes
+# the vector of classes `z` as:
+#   * onehot: one-hot encoding for the classes, where the class
+#     'n_classes' is encoded as all 0's
+#   * N_up_to: for each sample of class c, row i is 1 if i>=c and
+#     0 otherwise. Note that if c=n_classes, all rows are 0's
+#
+# Note: K is the number of classes
+function encode(z::Vector{T}, K::Int) where T <: Int
+    onehot = zeros(T, K - 1, length(z))
+    for i = 1:K-1 onehot[i, z .== i] .= 1 end
+
+    N_up_to = zeros(T, K - 1, length(z))
+    for i = 1:K-1 N_up_to[i, z .>= i] .= 1 end
+
+    onehot, N_up_to
 end
 
 #######################################################################
@@ -81,7 +113,6 @@ end
 function (model::BinaryLogisticRegression)(
     X::Matrix{T1},
     z::Vector{T2},
-    Nₖ::Union{Vector{T2}, Nothing} = nothing
 ) where {T1 <: AbstractFloat, T2 <: Real}
 
     X̂ = regressors(model.hasbias, X)
@@ -92,24 +123,18 @@ function (model::BinaryLogisticRegression)(
     E_ββᵀ = Σ + μ * μ'
 
     # Pre-compute the terms of the lower-bound
-    zstats = isnothing(Nₖ) ? (z .- 0.5) : z .- Nₖ * 0.5
-    E_βᵀX̂ = X̂' * E_β
-    X̂ᵀE_ββᵀX̂ = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
+    ψ = E_βᵀX̂ = X̂' * E_β
+    ψ² = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
 
-    # Polya-Gamma augmentation: compute the prior/posterior over ω
-    pω, qω = pgaugmentation(X̂ᵀE_ββᵀX̂)
-    E_ω = mean(qω)
+    # PolyaGamma augmentation
+    E_ω, kl_ω = pgaugmentation(ψ²)
 
-    # KL divegerence betwen qω and pω for each sample.
-    KL = kldivperdim(qω, pω)
-
-    zstats .* E_βᵀX̂ .-.5 .* E_ω .* X̂ᵀE_ββᵀX̂ .- log(2) .- KL
+    (z .- 0.5) .* ψ .-.5 .* E_ω .* ψ² .- log(2) .- kl_ω
 end
 
 function stats_β(model::BinaryLogisticRegression,
     X::Matrix{T1},
     z::Vector{T2},
-    Nₖ::Union{Vector{T2}, Nothing} = nothing
 ) where {T1 <: AbstractFloat, T2 <: Real}
 
     X̂ = regressors(model.hasbias, X)
@@ -120,12 +145,13 @@ function stats_β(model::BinaryLogisticRegression,
     E_ββᵀ = Σ + μ * μ'
 
     # Polya-Gamma augmentation: compute the prior/posterior over ω
-    X̂ᵀE_ββᵀX̂ = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
-    pω, qω = pgaugmentation(X̂ᵀE_ββᵀX̂)
-    E_ω = mean(qω)
+    ψ² = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
+
+    # PolyaGamma augmentation
+    E_ω, kl_ω = pgaugmentation(ψ²)
 
     # 1st order statistics
-    zstats = isnothing(Nₖ) ? (z .- 0.5) : z .- Nₖ * 0.5
+    zstats = (z .- 0.5)
     s1 = zeros(T1, size(X̂, 1))
     for i = 1:length(z)
         s1 .+= X̂[:, i] * zstats[i]
@@ -190,16 +216,17 @@ end
 
 
 struct LogisticRegression{K} <: Model
-    bases::Vector{<:ConjugateParameter{<:Normal}}
-    hasbias::Bool
+    stickbreaking::Vector{BinaryLogisticRegression}
+    ordering::Dict{Int, Int}
 
-    function LogisticRegression(bases::Vector{<:ConjugateParameter{<:Normal}},
+    function LogisticRegression(stickbreaking::Vector{BinaryLogisticRegression},
                                 hasbias::Bool)
-        model = new{length(bases) + 1}(bases, hasbias)
+        K = length(stickbreaking) + 1
+        model = new{K}(stickbreaking, Dict(i => i for i in 1:K))
 
         # We override the stats
-        for β in bases
-            β.stats = data -> stats_β(model, k, data...)
+        for (k, blr) in enumerate(stickbreaking)
+            blr.β.stats = data -> stats_β(model, k, data...)
         end
 
         return model
@@ -207,10 +234,14 @@ struct LogisticRegression{K} <: Model
 end
 
 function LogisticRegression(μ₀::Vector{T}, Σ₀::Matrix{T}, μ::Vector{T},
-                            Σ::Matrix{T}, hasbias::Bool; nclasses::Integer) where T <: AbstractFloat
-    bases = Vector([ConjugateParameter(Normal(μ₀, Σ₀), Normal(deepcopy(μ), deepcopy(Σ)))
-                    for i = 1:nclasses-1])
-    LogisticRegression(bases, hasbias)
+                            Σ::Matrix{T}, hasbias::Bool; nclasses::Integer
+                           ) where T <: AbstractFloat
+    stickbreaking = Vector{BinaryLogisticRegression}()
+    for i = 1:nclasses - 1
+        push!(stickbreaking,
+              BinaryLogisticRegression(μ₀, Σ₀, deepcopy(μ), deepcopy(Σ), hasbias))
+    end
+    LogisticRegression(stickbreaking, hasbias)
 end
 
 function LogisticRegression(T = Float64; inputdim::Integer, nclasses::Integer,
@@ -229,48 +260,93 @@ function LogisticRegression(T = Float64; inputdim::Integer, nclasses::Integer,
     LogisticRegression(μ₀, Σ₀, μ, Σ, hasbias, nclasses = nclasses)
 end
 
-getconjugateparams(model::LogisticRegression) = [m.β for m in model.bases]
+getconjugateparams(model::LogisticRegression) = [blr.β for blr in model.stickbreaking]
 
-function _encode(::LogisticRegression{K}, z::Vector{T}) where {K, T <: Integer}
-    onehot = zeros(T, K - 1, length(z))
-    for i = 1:K-1
-        onehot[i, z .== i] .= 1
+function reorder(
+    model::LogisticRegression{K},
+    X::Matrix{T1},
+    c::Vector{T2}
+) where {K, T1 <: AbstractFloat, T2 <: Integer}
+
+    # Compute the order-dependent terms of the ELBO
+    ln1_ν = ones(T1, K-1, length(c))
+    for (i, blr) in enumerate(model.stickbreaking)
+        X̂ = regressors(blr.hasbias, X)
+        μ, Σ = stdparam(blr.β.posterior)
+        E_β = μ
+        E_ββᵀ = Σ + μ * μ'
+
+        ψ = X̂' * E_β
+        ψ² = dropdims(sum(X̂ .* (E_ββᵀ * X̂), dims = 1), dims = 1)
+
+        E_ω, kl_ω = pgaugmentation(ψ²)
+
+        ln1_ν[i, :] = .5 * (-ψ .- E_ω .* ψ² .- kl_ω)
     end
 
-    # See eq. (6) in [1]. In our case, N = 1
-    Nₖ = zeros(T, K - 1, length(z))
-    for i = 1:K-1
-        Nₖ[i, z .>= i] .= 1
+    # Sum over the frame dimension. The result is a KxK-1 matrix.
+    M = zeros(K, K-1)
+    for i in 1:3 M[i, :] = sum(ln1_ν .* (c .== i)', dims = 2) end
+
+    idxs = sortperm(sum(M, dims = 2)[:, 1], rev = false)
+    for (i, j) in enumerate(idxs)
+        model.ordering[i] = j
     end
-
-   onehot, Nₖ
 end
 
-function (model::LogisticRegression)(X::Matrix{T1}, z::Vector{T2},) where {T1 <: AbstractFloat,
-                                                                           T2 <: Integer}
+function (model::LogisticRegression{K})(
+    X::Matrix{T1},
+    c::Vector{T2}
+) where {K, T1 <: AbstractFloat, T2 <: Integer}
 
+    # Re-map the labels to the "ideal" ordering
+    c = [model.ordering[cₙ] for cₙ in c]
+
+    llh = zeros(T1, length(c))
+    for i = 1:K-1
+        idxs = c .≥ i
+        zᵢ= Int.(c[idxs] .== i)
+        llh[idxs] .+= model.stickbreaking[i](X[:, idxs], zᵢ)
+    end
+    return llh
 end
 
-function stats_β(model::LogisticRegression, k::Integer,
-                         X::Matrix{T1},
-                         z::Vector{T2}) where {T1 <: AbstractFloat, T2 <: Real}
-    onehot, Nₖ = _encode(model, z)
-    stats_β(model.bases[k], X[:, z .>= k], onehot[k, z .>= k],
-                  Nₖ[k, z .>= k])
+function stats_β(
+    model::LogisticRegression,
+    i::Integer,
+    X::Matrix{T1},
+    c::Vector{T2}
+) where {T1 <: AbstractFloat, T2 <: Real}
+
+    # Re-map the labels to the "ideal" ordering
+    c = [model.ordering[cₙ] for cₙ in c]
+
+    idxs = c .≥ i
+    zᵢ= Int.(c[idxs] .== i)
+    stats_β(model.stickbreaking[i], X[:, idxs], zᵢ)
 end
 
-function predict(model::LogisticRegression{K}, X::Matrix{T};
-                 marginalize::Bool = true) where {K, T <: AbstractFloat}
+function predict(
+    model::LogisticRegression{K},
+    X::Matrix{T};
+    marginalize::Bool = true
+) where {K, T <: AbstractFloat}
+
     retval = zeros(T, K, size(X, 2))
     for k in 1:K
         residual = dropdims(sum(retval[1:k, :], dims = 1), dims = 1)
         if k < K
-            retval[k, :] = predict(model.bases[k], X,
+            retval[k, :] = predict(model.stickbreaking[k], X,
                                    marginalize = marginalize) .* (1 .- residual)
         else
             retval[k, :] = (1 .- residual)
         end
     end
-    retval
+
+    # Reverse "ideal" ordering of the target labels
+    rordering = Dict(value => key for (key, value) in model.ordering)
+    idxs = [rordering[i] for i in 1:K]
+
+    retval[idxs, :]
 end
 
